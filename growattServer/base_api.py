@@ -224,6 +224,78 @@ class GrowattApi:
         )
         return response.json().get("obj", {})
 
+    def sph_all_params(self, sph_sn, language=1, strip_units=True):
+        """
+        Read the full all-params snapshot for an SPH device.
+
+        Hits ``newTwoDeviceAPI.do?op=getSphAllParams`` — the endpoint
+        ShinePhone uses to populate its detailed device page. The
+        response is structured into top-level groups (``battery``,
+        ``solar``, ``grid``, ``inverter``, ``load``) plus ``sphType``,
+        and includes fields not surfaced by ``sph_system_status`` /
+        ``sph_energy_overview``:
+
+            battery:  bmsBatteryTemp, bmsBatteryCurr, spStatus
+            solar:    ipv1, ipv2, ipv3 (per-string currents)
+            grid:     etoUserToday, etoUserTotal (grid import — cleaner
+                      than the chart endpoint's etouser)
+            inverter: dcTemp, invTemp, epsIac1, upsPac1
+            load:     rLoadVol
+
+        Server returns values as unit-suffixed strings such as
+        ``'53.1V'``, ``'502.0W'``, ``'1.0kWh'``. With ``strip_units=True``
+        (default) the suffix is removed and the numeric portion is
+        coerced to int/float so the values are directly usable.
+
+        Args:
+            sph_sn (str): The SPH device serial number.
+            language (int): UI language code; 1 = English.
+            strip_units (bool): If True, strip unit suffixes from string
+                values and parse them as numbers where possible.
+
+        Returns:
+            dict: ``obj`` payload — a dict of {group_name: {field: value}}
+                plus a top-level ``sphType``.
+
+        """
+        response = self.session.post(
+            self.get_url("newTwoDeviceAPI.do"),
+            params={"op": "getSphAllParams"},
+            data={"lan": str(language), "sphSn": sph_sn},
+        )
+        obj = response.json().get("obj", {})
+        if not strip_units:
+            return obj
+
+        return self._strip_units_recursive(obj)
+
+    @staticmethod
+    def _strip_units_recursive(value):
+        """Strip trailing unit suffixes from string leaves and coerce to numbers."""
+        if isinstance(value, dict):
+            return {
+                k: GrowattApi._strip_units_recursive(v) for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [GrowattApi._strip_units_recursive(v) for v in value]
+        if isinstance(value, str):
+            # Walk back from the end while the char is a unit char. Common
+            # suffixes seen: V, A, W, Hz, %, kWh, °C.
+            unit_chars = set("VAWHzkWh°C% ")
+            i = len(value)
+            while i > 0 and value[i - 1] in unit_chars:
+                i -= 1
+            num_part = value[:i].rstrip()
+            if num_part and num_part != "-":
+                try:
+                    return int(num_part)
+                except ValueError:
+                    try:
+                        return float(num_part)
+                    except ValueError:
+                        return value
+        return value
+
     def sph_settings(self, sph_sn, language=1):
         """
         Read the full SPH settings bean.
